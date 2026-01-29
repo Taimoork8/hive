@@ -1,0 +1,14 @@
+{
+  "run_id": "run_demo_20260129_224157_5bcc501a",
+  "goal_id": "demo-goal",
+  "status": "completed",
+  "duration_ms": 3001,
+  "decision_count": 1,
+  "success_rate": 1.0,
+  "problem_count": 0,
+  "narrative": "Executed 1 steps through path: slow_node",
+  "key_decisions": [],
+  "critical_problems": [],
+  "warnings": [],
+  "successes": []
+}

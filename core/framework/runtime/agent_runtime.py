@@ -10,7 +10,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from framework.graph.executor import ExecutionResult
 from framework.runtime.event_bus import EventBus
@@ -18,6 +18,8 @@ from framework.runtime.execution_stream import EntryPointSpec, ExecutionStream
 from framework.runtime.outcome_aggregator import OutcomeAggregator
 from framework.runtime.shared_state import SharedStateManager
 from framework.storage.concurrent import ConcurrentStorage
+from framework.runtime.execution_guard import ExecutionLimitConfig
+
 
 if TYPE_CHECKING:
     from framework.graph.edge import GraphSpec
@@ -37,6 +39,8 @@ class AgentRuntimeConfig:
     max_history: int = 1000
     execution_result_max: int = 1000
     execution_result_ttl_seconds: float | None = None
+    execution_guard_config: Optional[ExecutionLimitConfig] = None  # None = no guardrails
+
 
 
 class AgentRuntime:
@@ -212,6 +216,7 @@ class AgentRuntime:
                     tool_executor=self._tool_executor,
                     result_retention_max=self._config.execution_result_max,
                     result_retention_ttl_seconds=self._config.execution_result_ttl_seconds,
+                    guard_config=spec.guard_config or self._config.execution_guard_config,
                 )
                 await stream.start()
                 self._streams[ep_id] = stream

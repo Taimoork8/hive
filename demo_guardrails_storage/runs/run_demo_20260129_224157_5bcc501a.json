@@ -1,0 +1,80 @@
+{
+  "id": "run_demo_20260129_224157_5bcc501a",
+  "goal_id": "demo-goal",
+  "started_at": "2026-01-29T22:41:57.040399",
+  "status": "completed",
+  "completed_at": "2026-01-29T22:42:00.041614",
+  "decisions": [
+    {
+      "id": "dec_0",
+      "timestamp": "2026-01-29T22:41:57.040475",
+      "node_id": "slow_node",
+      "intent": "Execute Slow",
+      "decision_type": "custom",
+      "options": [
+        {
+          "id": "llm_execute",
+          "description": "Use LLM to Slow node",
+          "action_type": "llm_call",
+          "action_params": {},
+          "pros": [],
+          "cons": [],
+          "confidence": 0.5
+        }
+      ],
+      "chosen_option_id": "llm_execute",
+      "reasoning": "Node type is llm_generate",
+      "active_constraints": [],
+      "input_context": {
+        "input": {
+          "x": "test"
+        }
+      },
+      "outcome": {
+        "success": true,
+        "result": "{\"result\": \"ok\"}",
+        "error": null,
+        "state_changes": {},
+        "tokens_used": 0,
+        "latency_ms": 3000,
+        "summary": "",
+        "timestamp": "2026-01-29T22:42:00.041180"
+      },
+      "evaluation": null,
+      "chosen_option": {
+        "id": "llm_execute",
+        "description": "Use LLM to Slow node",
+        "action_type": "llm_call",
+        "action_params": {},
+        "pros": [],
+        "cons": [],
+        "confidence": 0.5
+      },
+      "was_successful": true,
+      "was_good_decision": true
+    }
+  ],
+  "problems": [],
+  "metrics": {
+    "total_decisions": 1,
+    "successful_decisions": 1,
+    "failed_decisions": 0,
+    "total_tokens": 0,
+    "total_latency_ms": 3000,
+    "nodes_executed": [
+      "slow_node"
+    ],
+    "edges_traversed": [],
+    "success_rate": 1.0
+  },
+  "narrative": "Executed 1 steps through path: slow_node",
+  "goal_description": "Demo",
+  "input_data": {
+    "x": "test"
+  },
+  "output_data": {
+    "x": "test",
+    "result": "ok"
+  },
+  "duration_ms": 3001
+}

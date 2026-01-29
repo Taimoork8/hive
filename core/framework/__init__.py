@@ -28,6 +28,7 @@ from framework.runner import AgentOrchestrator, AgentRunner
 from framework.runtime.core import Runtime
 from framework.schemas.decision import Decision, DecisionEvaluation, Option, Outcome
 from framework.schemas.run import Problem, Run, RunSummary
+from .runtime.execution_guard import ExecutionGuard, ExecutionLimitConfig
 
 # Testing framework
 from framework.testing import (
@@ -41,6 +42,9 @@ from framework.testing import (
 )
 
 __all__ = [
+    # Execution guard
+    "ExecutionGuard",
+    "ExecutionLimitConfig",
     # Schemas
     "Decision",
     "Option",

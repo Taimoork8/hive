@@ -15,11 +15,12 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from framework.graph.executor import ExecutionResult, GraphExecutor
-from framework.runtime.shared_state import IsolationLevel, SharedStateManager
+from framework.runtime.shared_state import IsolationLevel, SharedStateManager, StateScope
 from framework.runtime.stream_runtime import StreamRuntime, StreamRuntimeAdapter
+from framework.runtime.execution_guard import ExecutionGuard, ExecutionLimitConfig
 
 if TYPE_CHECKING:
     from framework.graph.edge import GraphSpec
@@ -44,6 +45,8 @@ class EntryPointSpec:
     isolation_level: str = "shared"  # "isolated" | "shared" | "synchronized"
     priority: int = 0
     max_concurrent: int = 10  # Max concurrent executions for this entry point
+    # NEW: Guardrail configuration for this entry point
+    guard_config: Optional[ExecutionLimitConfig] = None  # None = use runtime defaults
 
     def get_isolation_level(self) -> IsolationLevel:
         """Convert string isolation level to enum."""
@@ -64,6 +67,8 @@ class ExecutionContext:
     started_at: datetime = field(default_factory=datetime.now)
     completed_at: datetime | None = None
     status: str = "pending"  # pending, running, completed, failed, paused
+    termination_reason: str | None = None  # Set when guardrail limit exceeded
+    termination_details: dict[str, Any] | None = None
 
 
 class ExecutionStream:
@@ -112,6 +117,7 @@ class ExecutionStream:
         tool_executor: Callable | None = None,
         result_retention_max: int | None = 1000,
         result_retention_ttl_seconds: float | None = None,
+        guard_config: Optional[ExecutionLimitConfig] = None,
     ):
         """
         Initialize execution stream.
@@ -142,6 +148,7 @@ class ExecutionStream:
         self._tool_executor = tool_executor
         self._result_retention_max = result_retention_max
         self._result_retention_ttl_seconds = result_retention_ttl_seconds
+        self.guard_config = guard_config
 
         # Create stream-scoped runtime
         self._runtime = StreamRuntime(
@@ -287,32 +294,33 @@ class ExecutionStream:
         return execution_id
 
     async def _run_execution(self, ctx: ExecutionContext) -> None:
-        """Run a single execution within the stream."""
+        """Run a single execution within the stream with guardrails."""
         execution_id = ctx.id
 
         # Acquire semaphore to limit concurrency
         async with self._semaphore:
             ctx.status = "running"
 
-            try:
-                # Emit started event
-                if self._event_bus:
-                    await self._event_bus.emit_execution_started(
-                        stream_id=self.stream_id,
-                        execution_id=execution_id,
-                        input_data=ctx.input_data,
-                        correlation_id=ctx.correlation_id,
-                    )
-
-                # Create execution-scoped memory
-                self._state_manager.create_memory(
+            # Initialize execution guard if guardrails are enabled
+            guard: Optional[ExecutionGuard] = None
+            if self.guard_config is not None:
+                guard = ExecutionGuard(execution_id, self.guard_config)
+                # Record guard start in shared state
+                await self._state_manager.write(
+                    "execution_guard_stats",
+                    guard.get_stats(),
                     execution_id=execution_id,
                     stream_id=self.stream_id,
-                    isolation=ctx.isolation_level,
+                    isolation=IsolationLevel.SHARED,
+                    scope=StateScope.EXECUTION,
                 )
 
-                # Create runtime adapter for this execution
-                runtime_adapter = StreamRuntimeAdapter(self._runtime, execution_id)
+            try:
+                # Set up runtime adapter
+                runtime_adapter = StreamRuntimeAdapter(
+                    stream_runtime=self._runtime,
+                    execution_id=execution_id,
+                )
 
                 # Create executor for this execution
                 executor = GraphExecutor(
@@ -323,84 +331,84 @@ class ExecutionStream:
                 )
 
                 # Create modified graph with entry point
-                # We need to override the entry_node to use our entry point
                 modified_graph = self._create_modified_graph()
 
-                # Execute
-                result = await executor.execute(
-                    graph=modified_graph,
-                    goal=self.goal,
-                    input_data=ctx.input_data,
-                    session_state=ctx.session_state,
-                )
+                # Set up guard checking coroutine
+                async def monitor_execution() -> None:
+                    """Background task to monitor execution limits."""
+                    if guard is None:
+                        return
+                    while True:
+                        await asyncio.sleep(1)  # Check every second
+                        result = guard.check_all_limits()
+                        if result.should_terminate:
+                            # Emit termination event
+                            if self._event_bus:
+                                from framework.runtime.event_bus import AgentEvent, EventType
 
-                # Store result with retention
-                self._record_execution_result(execution_id, result)
+                                await self._event_bus.publish(
+                                    AgentEvent(
+                                        type=EventType.EXECUTION_TERMINATED,
+                                        stream_id=self.stream_id,
+                                        execution_id=execution_id,
+                                        data={
+                                            "reason": result.reason,
+                                            "details": result.details,
+                                        },
+                                    )
+                                )
+                            ctx.termination_reason = result.reason
+                            ctx.termination_details = result.details
+                            break
 
-                # Update context
-                ctx.completed_at = datetime.now()
-                ctx.status = "completed" if result.success else "failed"
-                if result.paused_at:
-                    ctx.status = "paused"
+                # Start monitoring if guardrails enabled
+                monitor_task: Optional[asyncio.Task] = None
+                if guard is not None:
+                    monitor_task = asyncio.create_task(monitor_execution())
 
-                # Emit completion/failure event
-                if self._event_bus:
-                    if result.success:
-                        await self._event_bus.emit_execution_completed(
-                            stream_id=self.stream_id,
-                            execution_id=execution_id,
-                            output=result.output,
-                            correlation_id=ctx.correlation_id,
-                        )
-                    else:
-                        await self._event_bus.emit_execution_failed(
-                            stream_id=self.stream_id,
-                            execution_id=execution_id,
-                            error=result.error or "Unknown error",
-                            correlation_id=ctx.correlation_id,
-                        )
-
-                logger.debug(f"Execution {execution_id} completed: success={result.success}")
-
-            except asyncio.CancelledError:
-                ctx.status = "cancelled"
-                raise
-
-            except Exception as e:
-                ctx.status = "failed"
-                logger.error(f"Execution {execution_id} failed: {e}")
-
-                # Store error result with retention
-                self._record_execution_result(
-                    execution_id,
-                    ExecutionResult(
-                        success=False,
-                        error=str(e),
-                    ),
-                )
-
-                # Emit failure event
-                if self._event_bus:
-                    await self._event_bus.emit_execution_failed(
-                        stream_id=self.stream_id,
-                        execution_id=execution_id,
-                        error=str(e),
-                        correlation_id=ctx.correlation_id,
+                try:
+                    # Execute
+                    result = await executor.execute(
+                        graph=modified_graph,
+                        goal=self.goal,
+                        input_data=ctx.input_data,
+                        session_state=ctx.session_state,
                     )
 
+                    # Store result with retention
+                    self._record_execution_result(execution_id, result)
+                    ctx.status = "completed"
+                    ctx.completed_at = datetime.now()
+                finally:
+                    # Stop monitoring
+                    if monitor_task is not None:
+                        monitor_task.cancel()
+                        try:
+                            await monitor_task
+                        except asyncio.CancelledError:
+                            pass
+
+            except Exception as e:
+                # Log with guard info if available
+                ctx.status = "failed"
+                ctx.completed_at = datetime.now()
+                if guard is not None:
+                    logger.warning(
+                        "Execution %s failed; guard_stats=%s",
+                        execution_id,
+                        guard.get_stats(),
+                    )
+                raise
+
             finally:
-                # Clean up state
+                # Signal completion so wait_for_completion returns
+                ev = self._completion_events.get(execution_id)
+                if ev is not None:
+                    ev.set()
+                self._completion_events.pop(execution_id, None)
+                self._execution_tasks.pop(execution_id, None)
+                self._active_executions.pop(execution_id, None)
                 self._state_manager.cleanup_execution(execution_id)
-
-                # Signal completion
-                if execution_id in self._completion_events:
-                    self._completion_events[execution_id].set()
-
-                # Remove in-flight bookkeeping
-                async with self._lock:
-                    self._active_executions.pop(execution_id, None)
-                    self._completion_events.pop(execution_id, None)
-                    self._execution_tasks.pop(execution_id, None)
 
     def _create_modified_graph(self) -> "GraphSpec":
         """Create a graph with the entry point overridden."""

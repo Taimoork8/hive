@@ -27,6 +27,7 @@ class EventType(str, Enum):
     EXECUTION_FAILED = "execution_failed"
     EXECUTION_PAUSED = "execution_paused"
     EXECUTION_RESUMED = "execution_resumed"
+    EXECUTION_TERMINATED = "execution_terminated"  # Guardrail limit exceeded
 
     # State changes
     STATE_CHANGED = "state_changed"
@@ -454,3 +455,17 @@ class EventBus:
             return result
         finally:
             self.unsubscribe(sub_id)
+
+
+class ExecutionEvent:
+    """Events emitted during agent execution."""
+    
+    def __init__(self, type: str, execution_id: str, stream_id: str, time: datetime, data: dict):
+        self.type = type
+        self.execution_id = execution_id
+        self.stream_id = stream_id
+        self.time = time
+        self.data = data
+
+# Add new event type for guardrail termination
+EXECUTION_TERMINATED = "execution_terminated"
