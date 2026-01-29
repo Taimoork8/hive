@@ -1,0 +1,30 @@
+feat(runtime): add execution guardrails to prevent runaway agent execution
+
+Introduce deterministic runtime safety limits enforced inside the agent
+execution loop. The guard evaluates step, time, token, and cost limits
+and terminates execution with structured reasons for observability.
+
+Changes:
+- Add ExecutionGuard and ExecutionLimitConfig in runtime/execution_guard.py
+  (step, runtime_ms, token, cost limits; check_all_limits(), get_stats())
+- Add ExecutionGuardResult for termination reason and details
+- Extend AgentRuntimeConfig with execution_guard_config (optional)
+- Extend EntryPointSpec with guard_config (per-entry-point override)
+- Integrate guard into ExecutionStream._run_execution:
+  - Create guard when guard_config is set; write stats to shared state
+  - Background monitor task checks limits every second
+  - On limit exceeded: publish EXECUTION_TERMINATED, set ctx.termination_*
+  - Use StreamRuntimeAdapter(stream_runtime=..., execution_id=...)
+  - Fix completion signaling (set completion event, cleanup in finally)
+- Add EventType.EXECUTION_TERMINATED to event_bus
+- Add ExecutionContext.termination_reason and termination_details
+- Pass guard_config from AgentRuntime to ExecutionStream
+  (spec.guard_config or config.execution_guard_config)
+- Export ExecutionGuard, ExecutionLimitConfig from runtime and framework
+- Step limit: terminate when step_count > max_steps (allow exactly max_steps)
+- Add unit tests in framework/testing/test_execution_guard.py
+- Add demos: demo_guardrails_simple.py, demo_guardrails.py,
+  demo_guardrails_ui.py (Streamlit), README_guardrails.md
+
+Backward compatible: guardrails are optional (None = no enforcement).
+Default behavior unchanged when execution_guard_config is not set.
